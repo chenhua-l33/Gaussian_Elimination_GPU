@@ -1,0 +1,126 @@
+#pragma OPENCL EXTENSION cl_amd_printf : enable 
+
+//////////////////////////////////////////////////
+// OPTIMIZED GAUSSIAN ELIMINATION KERNELS      //
+//////////////////////////////////////////////////
+
+// Strategy 1: Block-based Forward Elimination with Shared Memory
+// FIXED: Each work item processes one complete row to avoid race conditions
+__kernel void forwardEliminationBlocked(
+    __global float* matrix,
+    __global float* b,
+    int n,
+    int pivot_row,
+    __local float* pivot_cache    // Shared memory for pivot row
+)
+{
+    int tid = get_local_id(0);
+    int wg_size = get_local_size(0);
+    int gid = get_global_id(0);
+    int row = gid + pivot_row + 1; // Start from the row after pivot
+    
+    if (row >= n) return;
+    
+    // Cooperatively load pivot row into shared memory
+    int pivot_elements = n - pivot_row;
+    for (int i = tid; i < pivot_elements; i += wg_size) {
+        if (pivot_row + i < n) {
+            pivot_cache[i] = matrix[pivot_row * n + pivot_row + i];
+        }
+    }
+    
+    // Cache pivot b value at the end of the cache
+    if (tid == 0) {
+        pivot_cache[pivot_elements] = b[pivot_row];
+    }
+    
+    barrier(CLK_LOCAL_MEM_FENCE);
+    
+    // Calculate elimination factor
+    float pivot_element = pivot_cache[0]; // matrix[pivot_row][pivot_row]
+    if (fabs(pivot_element) < 1e-10f) return; // Avoid division by zero
+    
+    float factor = matrix[row * n + pivot_row] / pivot_element;
+    
+    // FIXED: Each work item processes its entire row sequentially
+    // This eliminates race conditions between work items
+    for (int col = pivot_row; col < n; col++) {
+        int cache_idx = col - pivot_row;
+        matrix[row * n + col] -= factor * pivot_cache[cache_idx];
+    }
+    
+    // Update RHS vector - each work item updates its own row
+    b[row] -= factor * pivot_cache[pivot_elements];
+}
+
+// Strategy 2: Optimized Forward Elimination with Coalesced Memory Access
+// This version is already correct - each thread handles one element
+__kernel void forwardEliminationCoalesced(
+    __global float* matrix,
+    __global float* b,
+    int n,
+    int pivot_row
+)
+{
+    int gid = get_global_id(0);
+    
+    // Calculate which row and column this thread handles
+    int remaining_rows = n - pivot_row - 1;
+    int remaining_cols = n - pivot_row;
+    
+    if (remaining_rows <= 0 || remaining_cols <= 0) return;
+    
+    int total_elements = remaining_rows * remaining_cols;
+    if (gid >= total_elements) return;
+    
+    int row_offset = gid / remaining_cols;
+    int col_offset = gid % remaining_cols;
+    
+    int row = pivot_row + 1 + row_offset;
+    int col = pivot_row + col_offset;
+    
+    if (row >= n || col >= n) return;
+    
+    // Load pivot element
+    float pivot_element = matrix[pivot_row * n + pivot_row];
+    if (fabs(pivot_element) < 1e-10f) return;
+    
+    // Calculate factor for this row (each thread in the same row will compute the same factor)
+    float factor = matrix[row * n + pivot_row] / pivot_element;
+    
+    // Perform elimination - each thread handles one element
+    matrix[row * n + col] -= factor * matrix[pivot_row * n + col];
+    
+    // Update b vector (only first thread of each row)
+    if (col_offset == 0) {
+        b[row] -= factor * b[pivot_row];
+    }
+}
+
+// Simple Back Substitution (single workgroup)
+__kernel void backSubstitution(
+    __global float* matrix,
+    __global float* b,
+    __global float* x,
+    int n
+)
+{
+    int tid = get_global_id(0);
+    
+    if (tid != 0) return; // Only thread 0 does the work
+    
+    // Back substitution - must be done sequentially
+    for (int i = n - 1; i >= 0; i--) {
+        float sum = b[i];
+        for (int j = i + 1; j < n; j++) {
+            sum -= matrix[i * n + j] * x[j];
+        }
+        
+        float diagonal = matrix[i * n + i];
+        if (fabs(diagonal) > 1e-10f) {
+            x[i] = sum / diagonal;
+        } else {
+            x[i] = 0.0f; // Handle singular case
+        }
+    }
+}

@@ -1,0 +1,59 @@
+#pragma OPENCL EXTENSION cl_amd_printf : enable 
+
+//////////////////////////////////
+// GAUSSIAN ELIMINATION KERNELS //
+/////////////////////////////////
+
+// Naive Forward Elimination Kernel
+// This kernel eliminates one column at a time
+// Each work item processes one row below the pivot
+__kernel void forwardElimination(
+    __global float* matrix,
+    __global float* b,
+    int n,
+    int pivot_row
+)
+{
+    // The host uses offset cl::NDRange(k + 1), so get_global_id(0) already starts from the correct row
+    int row = get_global_id(0);
+    
+    if (row >= n) return;
+    
+    // Calculate elimination factor
+    float factor = matrix[row * n + pivot_row] / matrix[pivot_row * n + pivot_row];
+    
+    // Eliminate all elements in this row
+    for (int col = pivot_row; col < n; col++) {
+        matrix[row * n + col] -= factor * matrix[pivot_row * n + col];
+    }
+    
+    // Update RHS vector
+    b[row] -= factor * b[pivot_row];
+}
+
+///////////////////////////////////
+// Naive Back Substitution Kernel//
+///////////////////////////////////
+// Each work item computes one unknown
+__kernel void backSubstitution(
+    __global float* matrix,
+    __global float* b,
+    __global float* x,
+    int n
+)
+{
+    // This kernel should be called with only ONE work item
+    // Or we need to process sequentially
+    int tid = get_global_id(0);
+    
+    if (tid != 0) return; // Only thread 0 does the work
+    
+    // Back substitution - must be done sequentially
+    for (int i = n - 1; i >= 0; i--) {
+        float sum = b[i];
+        for (int j = i + 1; j < n; j++) {
+            sum -= matrix[i * n + j] * x[j];
+        }
+        x[i] = sum / matrix[i * n + i];
+    }
+}
