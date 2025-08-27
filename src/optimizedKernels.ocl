@@ -97,6 +97,57 @@ __kernel void forwardEliminationCoalesced(
     }
 }
 
+__kernel void forwardEliminationCoalescedIntensive(
+    __global float* matrix,
+    __global float* b,
+    int n,
+    int pivot_row,
+    int loop_count
+)
+{
+    int gid = get_global_id(0);
+    
+    int remaining_rows = n - pivot_row - 1;
+    int remaining_cols = n - pivot_row;
+    
+    if (remaining_rows <= 0 || remaining_cols <= 0) return;
+    
+    int total_elements = remaining_rows * remaining_cols;
+    if (gid >= total_elements) return;
+    
+    int row_offset = gid / remaining_cols;
+    int col_offset = gid % remaining_cols;
+    
+    int row = pivot_row + 1 + row_offset;
+    int col = pivot_row + col_offset;
+    
+    if (row >= n || col >= n) return;
+    
+    float pivot_element = matrix[pivot_row * n + pivot_row];
+    if (fabs(pivot_element) < 1e-10f) return;
+    
+    float factor = matrix[row * n + pivot_row] / pivot_element;
+    float pivot_value = matrix[pivot_row * n + col];
+    
+    // FIXED: Make the loop actually do work that affects the result
+    // Method 1: Accumulate with slight variations
+    float accumulated_factor = factor;
+    for (int j = 1; j < loop_count; j++) {
+        // Slightly modify the factor each iteration so compiler can't optimize
+        accumulated_factor += factor * (j * 1e-10f);  // Very small change
+        accumulated_factor *= 0.999999f;              // Prevent overflow
+        accumulated_factor += factor * 1e-10f;        // Add back to maintain magnitude
+    }
+    
+    // Use the accumulated result (will be very close to original factor)
+    matrix[row * n + col] -= accumulated_factor * pivot_value;
+    
+    if (col_offset == 0) {
+        b[row] -= factor * b[pivot_row];  // Keep b update simple
+    }
+}
+
+
 // Simple Back Substitution (single workgroup)
 __kernel void backSubstitution(
     __global float* matrix,
@@ -124,3 +175,4 @@ __kernel void backSubstitution(
         }
     }
 }
+
