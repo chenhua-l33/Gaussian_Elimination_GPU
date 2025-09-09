@@ -15,10 +15,43 @@
 #include <JC/util.h>
 #include <JC/openCLUtil.hpp>
 
+/**
+ * @file GaussianEliminationCI.cpp
+ * @brief Compute-intensive variant of GPU Gaussian Elimination
+ *
+ * This implementation extends the optimized Gaussian Elimination to study
+ * the effects of varying compute intensity on GPU performance. It helps
+ * analyze:
+ * - Memory bandwidth vs compute bound behavior
+ * - Operational intensity impact
+ * - GPU utilization characteristics
+ * - Performance scaling with workload
+ *
+ * Features:
+ * - Controllable compute intensity via loop count
+ * - Baseline coalesced implementation for comparison
+ * - Detailed performance metrics
+ * - Memory bandwidth analysis
+ * - FLOPS/byte ratio measurement
+ */
+
 using namespace std;
 
-// Optimized GPU Gaussian Elimination with Compute Intensity Control
-class ComputeIntensiveGaussianElimination {
+/**
+ * @brief Class implementing compute-intensive Gaussian Elimination
+ *
+ * This class provides two implementations:
+ * 1. Baseline coalesced memory access version
+ * 2. Compute-intensive version with controllable loop count
+ *
+ * The compute-intensive version adds controlled computation to study:
+ * - GPU compute vs memory bound behavior
+ * - Performance scaling with operational intensity
+ * - Memory bandwidth utilization
+ * - Compute unit efficiency
+ */
+class ComputeIntensiveGaussianElimination
+{
 private:
     cl::Device device;
     cl::Context context;
@@ -35,7 +68,8 @@ private:
 
 public:
     ComputeIntensiveGaussianElimination(int matrix_size, cl::Device dev, cl::Context ctx, cl::CommandQueue q, cl::Program prog)
-        : n(matrix_size), device(dev), context(ctx), queue(q), program(prog) {
+        : n(matrix_size), device(dev), context(ctx), queue(q), program(prog)
+    {
 
         // Initialize kernels
         kernel_coalesced = cl::Kernel(program, "forwardEliminationCoalesced");
@@ -53,11 +87,27 @@ public:
         cout << "  Local memory: " << max_local_memory / 1024 << " KB" << endl;
     }
 
-    // Original coalesced implementation
-    _int64 solveCoalesced(cl::Buffer& matrix_buf, cl::Buffer& b_buf, cl::Buffer& x_buf) {
+    /**
+     * @brief Baseline coalesced implementation for comparison
+     *
+     * This is the standard coalesced memory access implementation that
+     * serves as a baseline for performance comparison. Features:
+     * - Optimized memory access patterns
+     * - One thread per matrix element
+     * - Minimal computation per element
+     * - Maximum memory bandwidth utilization
+     *
+     * @param matrix_buf Matrix buffer [n x n]
+     * @param b_buf      RHS vector buffer [n]
+     * @param x_buf      Solution vector buffer [n]
+     * @return          Execution time in microseconds
+     */
+    _int64 solveCoalesced(cl::Buffer &matrix_buf, cl::Buffer &b_buf, cl::Buffer &x_buf)
+    {
         chrono::time_point<chrono::system_clock> start = chrono::system_clock::now();
 
-        for (int k = 0; k < n - 1; k++) {
+        for (int k = 0; k < n - 1; k++)
+        {
             kernel_coalesced.setArg(0, matrix_buf);
             kernel_coalesced.setArg(1, b_buf);
             kernel_coalesced.setArg(2, n);
@@ -66,14 +116,15 @@ public:
             size_t remaining_rows = n - k - 1;
             size_t remaining_cols = n - k;
 
-            if (remaining_rows == 0 || remaining_cols == 0) break;
+            if (remaining_rows == 0 || remaining_cols == 0)
+                break;
 
             size_t total_elements = remaining_rows * remaining_cols;
             size_t global_size = ((total_elements + local_work_size - 1) / local_work_size) * local_work_size;
 
             queue.enqueueNDRangeKernel(kernel_coalesced, cl::NullRange,
-                cl::NDRange(global_size),
-                cl::NDRange(local_work_size));
+                                       cl::NDRange(global_size),
+                                       cl::NDRange(local_work_size));
 
             queue.finish();
         }
@@ -83,11 +134,36 @@ public:
         return chrono::duration_cast<chrono::microseconds>(chrono::system_clock::now() - start).count();
     }
 
-    // Compute intensive version with controllable loop count
-    _int64 solveCoalescedIntensive(cl::Buffer& matrix_buf, cl::Buffer& b_buf, cl::Buffer& x_buf, int loop_count = 100) {
+    /**
+     * @brief Compute-intensive version with controllable workload
+     *
+     * This version extends the coalesced implementation by adding
+     * controlled computation to study GPU behavior:
+     *
+     * Features:
+     * - Configurable computation via loop count
+     * - Maintains memory access patterns
+     * - Artificial workload that affects results
+     * - Controlled numerical stability
+     *
+     * Analysis capabilities:
+     * - Memory vs compute bound behavior
+     * - Operational intensity impact
+     * - GPU utilization patterns
+     * - Performance scaling
+     *
+     * @param matrix_buf Matrix buffer [n x n]
+     * @param b_buf      RHS vector buffer [n]
+     * @param x_buf      Solution vector buffer [n]
+     * @param loop_count Number of computation iterations (default: 100)
+     * @return          Execution time in microseconds
+     */
+    _int64 solveCoalescedIntensive(cl::Buffer &matrix_buf, cl::Buffer &b_buf, cl::Buffer &x_buf, int loop_count = 100)
+    {
         chrono::time_point<chrono::system_clock> start = chrono::system_clock::now();
 
-        for (int k = 0; k < n - 1; k++) {
+        for (int k = 0; k < n - 1; k++)
+        {
             kernel_coalesced_intensive.setArg(0, matrix_buf);
             kernel_coalesced_intensive.setArg(1, b_buf);
             kernel_coalesced_intensive.setArg(2, n);
@@ -97,14 +173,15 @@ public:
             size_t remaining_rows = n - k - 1;
             size_t remaining_cols = n - k;
 
-            if (remaining_rows == 0 || remaining_cols == 0) break;
+            if (remaining_rows == 0 || remaining_cols == 0)
+                break;
 
             size_t total_elements = remaining_rows * remaining_cols;
             size_t global_size = ((total_elements + local_work_size - 1) / local_work_size) * local_work_size;
 
             queue.enqueueNDRangeKernel(kernel_coalesced_intensive, cl::NullRange,
-                cl::NDRange(global_size),
-                cl::NDRange(local_work_size));
+                                       cl::NDRange(global_size),
+                                       cl::NDRange(local_work_size));
 
             queue.finish();
         }
@@ -114,20 +191,59 @@ public:
         return chrono::duration_cast<chrono::microseconds>(chrono::system_clock::now() - start).count();
     }
 
-    void solveBackSubstitution(cl::Buffer& matrix_buf, cl::Buffer& b_buf, cl::Buffer& x_buf) {
+    /**
+     * @brief Sequential back substitution solver
+     *
+     * Simple back substitution implementation that runs on a single thread
+     * to maintain numerical stability and avoid race conditions.
+     *
+     * @param matrix_buf Upper triangular matrix [n x n]
+     * @param b_buf      Modified RHS vector [n]
+     * @param x_buf      Solution vector output [n]
+     */
+    void solveBackSubstitution(cl::Buffer &matrix_buf, cl::Buffer &b_buf, cl::Buffer &x_buf)
+    {
         kernel_back.setArg(0, matrix_buf);
         kernel_back.setArg(1, b_buf);
         kernel_back.setArg(2, x_buf);
         kernel_back.setArg(3, n);
 
         queue.enqueueNDRangeKernel(kernel_back, cl::NullRange,
-            cl::NDRange(1),
-            cl::NDRange(1));
+                                   cl::NDRange(1),
+                                   cl::NDRange(1));
     }
 };
 
-int main(int argc, char* argv[]) {
-    try {
+/**
+ * @brief Main function for compute intensity analysis
+ *
+ * This program compares three implementations:
+ * 1. CPU sequential (reference)
+ * 2. GPU coalesced (baseline)
+ * 3. GPU compute-intensive (test)
+ *
+ * Analysis metrics:
+ * - Execution time
+ * - Solution accuracy
+ * - GFLOPS performance
+ * - Memory bandwidth
+ * - Operational intensity
+ * - Compute vs memory bound behavior
+ *
+ * Command line arguments:
+ * -p <platform>  OpenCL platform ID
+ * -d <device>    OpenCL device ID
+ * -n <size>      Matrix dimension
+ * -c <count>     Computation loop count
+ *
+ * @param argc Argument count
+ * @param argv Argument array
+ * @return     0 on success, error code on failure
+ */
+int main(int argc, char *argv[])
+{
+    try
+    {
         string kernel_file("optimizedKernels.ocl");
 
         int PLATFORM_ID = defaultOrViaArgs(0, 'p', argc, argv);
@@ -136,8 +252,10 @@ int main(int argc, char* argv[]) {
 
         // Parse loop count instead of compute intensity
         int loop_count = 100; // default
-        for (int i = 1; i < argc - 1; i++) {
-            if (strcmp(argv[i], "-c") == 0) {
+        for (int i = 1; i < argc - 1; i++)
+        {
+            if (strcmp(argv[i], "-c") == 0)
+            {
                 loop_count = atoi(argv[i + 1]);
                 break;
             }
@@ -156,22 +274,25 @@ int main(int argc, char* argv[]) {
         ComputeIntensiveGaussianElimination solver(n, device, context, queue, program);
 
         // Allocate and initialize data
-        float* matrix_original = new float[n * n];
-        float* matrix_gpu = new float[n * n];
-        float* matrix_intensive = new float[n * n];
-        float* b_original = new float[n];
-        float* b_gpu = new float[n];
-        float* b_intensive = new float[n];
-        float* x_cpu = new float[n];
-        float* x_gpu = new float[n];
-        float* x_intensive = new float[n];
+        float *matrix_original = new float[n * n];
+        float *matrix_gpu = new float[n * n];
+        float *matrix_intensive = new float[n * n];
+        float *b_original = new float[n];
+        float *b_gpu = new float[n];
+        float *b_intensive = new float[n];
+        float *x_cpu = new float[n];
+        float *x_gpu = new float[n];
+        float *x_intensive = new float[n];
 
         // Create test system
         srand(42);
-        for (int i = 0; i < n; i++) {
+        for (int i = 0; i < n; i++)
+        {
             float rowSum = 0.0f;
-            for (int j = 0; j < n; j++) {
-                if (i != j) {
+            for (int j = 0; j < n; j++)
+            {
+                if (i != j)
+                {
                     matrix_original[i * n + j] = ((float)rand() / RAND_MAX) * 2.0f - 1.0f;
                     rowSum += abs(matrix_original[i * n + j]);
                 }
@@ -190,32 +311,40 @@ int main(int argc, char* argv[]) {
         auto cpu_start = chrono::system_clock::now();
 
         vector<vector<float>> aug(n, vector<float>(n + 1));
-        for (int i = 0; i < n; i++) {
-            for (int j = 0; j < n; j++) {
+        for (int i = 0; i < n; i++)
+        {
+            for (int j = 0; j < n; j++)
+            {
                 aug[i][j] = matrix_original[i * n + j];
             }
             aug[i][n] = b_original[i];
         }
 
-        for (int k = 0; k < n - 1; k++) {
-            for (int i = k + 1; i < n; i++) {
+        for (int k = 0; k < n - 1; k++)
+        {
+            for (int i = k + 1; i < n; i++)
+            {
                 float factor = aug[i][k] / aug[k][k];
-                for (int j = k; j <= n; j++) {
+                for (int j = k; j <= n; j++)
+                {
                     aug[i][j] -= factor * aug[k][j];
                 }
             }
         }
 
-        for (int i = n - 1; i >= 0; i--) {
+        for (int i = n - 1; i >= 0; i--)
+        {
             x_cpu[i] = aug[i][n];
-            for (int j = i + 1; j < n; j++) {
+            for (int j = i + 1; j < n; j++)
+            {
                 x_cpu[i] -= aug[i][j] * x_cpu[j];
             }
             x_cpu[i] /= aug[i][i];
         }
 
         auto cpu_time = chrono::duration_cast<chrono::microseconds>(
-            chrono::system_clock::now() - cpu_start).count();
+                            chrono::system_clock::now() - cpu_start)
+                            .count();
         cout << "CPU time: " << cpu_time << " us" << endl;
 
         // GPU solutions
@@ -251,15 +380,18 @@ int main(int argc, char* argv[]) {
         float max_error_original = 0.0f;
         float max_error_intensive = 0.0f;
 
-        for (int i = 0; i < n; i++) {
+        for (int i = 0; i < n; i++)
+        {
             float error_original = abs(x_cpu[i] - x_gpu[i]);
             float error_intensive = abs(x_cpu[i] - x_intensive[i]);
 
             max_error_original = max(max_error_original, error_original);
             max_error_intensive = max(max_error_intensive, error_intensive);
 
-            if (error_original > 1e-3) verified_original = false;
-            if (error_intensive > 1e-3) verified_intensive = false;
+            if (error_original > 1e-3)
+                verified_original = false;
+            if (error_intensive > 1e-3)
+                verified_intensive = false;
         }
 
         cout << "\n=== Results ===" << endl;
@@ -303,11 +435,13 @@ int main(int argc, char* argv[]) {
 
         return 0;
     }
-    catch (cl::Error& e) {
+    catch (cl::Error &e)
+    {
         cerr << "OpenCL Error: " << e.what() << ": " << jc::readableStatus(e.err()) << endl;
         return 3;
     }
-    catch (exception& e) {
+    catch (exception &e)
+    {
         cerr << "Error: " << e.what() << endl;
         return 2;
     }

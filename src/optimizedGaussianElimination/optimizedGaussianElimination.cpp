@@ -15,10 +15,45 @@
 #include <JC/util.h>
 #include <JC/openCLUtil.hpp>
 
+/**
+ * @file optimizedGaussianElimination.cpp
+ * @brief Optimized GPU implementation of Gaussian Elimination
+ *
+ * This implementation provides two optimized strategies for solving
+ * linear systems using Gaussian Elimination on GPUs:
+ *
+ * 1. Blocked Strategy:
+ *    - Uses shared/local memory to cache pivot row
+ *    - Reduces global memory access
+ *    - Dynamically adjusts block size based on available memory
+ *    - Better for memory-bound systems
+ *
+ * 2. Coalesced Strategy:
+ *    - Optimizes memory access patterns
+ *    - One thread per matrix element
+ *    - Maximizes memory bandwidth utilization
+ *    - Better for compute-bound systems
+ *
+ * Both strategies include:
+ * - Automatic workgroup size optimization
+ * - Device capability detection
+ * - Performance monitoring
+ * - Error checking and verification
+ */
+
 using namespace std;
 
-// Optimized GPU Gaussian Elimination with two main strategies
-class OptimizedGaussianElimination {
+/**
+ * @brief Class implementing optimized GPU Gaussian Elimination
+ *
+ * Features:
+ * - Multiple optimization strategies
+ * - Dynamic shared memory allocation
+ * - Automatic parameter tuning
+ * - Performance profiling
+ */
+class OptimizedGaussianElimination
+{
 private:
     cl::Device device;
     cl::Context context;
@@ -36,7 +71,8 @@ private:
 
 public:
     OptimizedGaussianElimination(int matrix_size, cl::Device dev, cl::Context ctx, cl::CommandQueue q, cl::Program prog)
-        : n(matrix_size), device(dev), context(ctx), queue(q), program(prog) {
+        : n(matrix_size), device(dev), context(ctx), queue(q), program(prog)
+    {
 
         // Initialize kernels
         kernel_blocked = cl::Kernel(program, "forwardEliminationBlocked");
@@ -55,18 +91,40 @@ public:
         cout << "  Local memory: " << max_local_memory / 1024 << " KB" << endl;
     }
 
-    // Strategy 1: Blocked elimination with shared memory optimization
-    _int64 solveBlocked(cl::Buffer& matrix_buf, cl::Buffer& b_buf, cl::Buffer& x_buf) {
+    /**
+     * @brief Strategy 1: Blocked elimination with shared memory optimization
+     *
+     * This strategy optimizes memory access by:
+     * 1. Caching pivot row in shared/local memory
+     * 2. Cooperative loading of pivot data
+     * 3. Dynamic adjustment of block size
+     * 4. Efficient workgroup sizing
+     *
+     * Memory optimization:
+     * - Reduces global memory traffic
+     * - Uses local memory for frequently accessed data
+     * - Adjusts shared memory usage based on device limits
+     * - Maintains coalesced access patterns where possible
+     *
+     * @param matrix_buf Matrix buffer [n x n]
+     * @param b_buf      RHS vector buffer [n]
+     * @param x_buf      Solution vector buffer [n]
+     * @return          Execution time in microseconds
+     */
+    _int64 solveBlocked(cl::Buffer &matrix_buf, cl::Buffer &b_buf, cl::Buffer &x_buf)
+    {
         chrono::time_point<chrono::system_clock> start = chrono::system_clock::now();
 
         // Forward elimination with dynamic shared memory allocation
-        for (int k = 0; k < n - 1; k++) {
+        for (int k = 0; k < n - 1; k++)
+        {
             // Calculate shared memory needed for this iteration
-            int pivot_elements = n - k; // elements from pivot column to end
+            int pivot_elements = n - k;                                         // elements from pivot column to end
             size_t shared_memory_needed = (pivot_elements + 1) * sizeof(float); // +1 for b element
 
             // Check if we exceed local memory limits
-            if (shared_memory_needed > max_local_memory) {
+            if (shared_memory_needed > max_local_memory)
+            {
                 // Fallback to smaller workgroup or skip shared memory optimization
                 shared_memory_needed = max_local_memory / 2;
                 pivot_elements = (shared_memory_needed / sizeof(float)) - 1;
@@ -74,7 +132,8 @@ public:
 
             // Calculate workgroup size
             size_t rows_to_process = n - k - 1;
-            if (rows_to_process == 0) break;
+            if (rows_to_process == 0)
+                break;
 
             size_t max_workgroup_size = min(local_work_size, rows_to_process);
 
@@ -88,8 +147,8 @@ public:
             size_t global_size = ((rows_to_process + max_workgroup_size - 1) / max_workgroup_size) * max_workgroup_size;
 
             queue.enqueueNDRangeKernel(kernel_blocked, cl::NullRange,
-                cl::NDRange(global_size),
-                cl::NDRange(max_workgroup_size));
+                                       cl::NDRange(global_size),
+                                       cl::NDRange(max_workgroup_size));
 
             // Add synchronization to ensure completion before next iteration
             queue.finish();
@@ -102,11 +161,38 @@ public:
         return chrono::duration_cast<chrono::microseconds>(chrono::system_clock::now() - start).count();
     }
 
-    // Strategy 2: Coalesced memory access pattern
-    _int64 solveCoalesced(cl::Buffer& matrix_buf, cl::Buffer& b_buf, cl::Buffer& x_buf) {
+    /**
+     * @brief Strategy 2: Coalesced memory access pattern optimization
+     *
+     * This strategy maximizes memory bandwidth by:
+     * 1. One thread per matrix element
+     * 2. Coalesced global memory access
+     * 3. Minimal thread divergence
+     * 4. Efficient work distribution
+     *
+     * Performance optimization:
+     * - Maximizes memory bandwidth utilization
+     * - Reduces thread synchronization overhead
+     * - Balances workload across compute units
+     * - Adapts to varying matrix sizes
+     *
+     * Memory access pattern:
+     * - Threads in a workgroup access consecutive memory
+     * - Aligned memory transactions
+     * - Efficient cache utilization
+     * - Minimal bank conflicts
+     *
+     * @param matrix_buf Matrix buffer [n x n]
+     * @param b_buf      RHS vector buffer [n]
+     * @param x_buf      Solution vector buffer [n]
+     * @return          Execution time in microseconds
+     */
+    _int64 solveCoalesced(cl::Buffer &matrix_buf, cl::Buffer &b_buf, cl::Buffer &x_buf)
+    {
         chrono::time_point<chrono::system_clock> start = chrono::system_clock::now();
 
-        for (int k = 0; k < n - 1; k++) {
+        for (int k = 0; k < n - 1; k++)
+        {
             kernel_coalesced.setArg(0, matrix_buf);
             kernel_coalesced.setArg(1, b_buf);
             kernel_coalesced.setArg(2, n);
@@ -116,14 +202,15 @@ public:
             size_t remaining_rows = n - k - 1;
             size_t remaining_cols = n - k;
 
-            if (remaining_rows == 0 || remaining_cols == 0) break;
+            if (remaining_rows == 0 || remaining_cols == 0)
+                break;
 
             size_t total_elements = remaining_rows * remaining_cols;
             size_t global_size = ((total_elements + local_work_size - 1) / local_work_size) * local_work_size;
 
             queue.enqueueNDRangeKernel(kernel_coalesced, cl::NullRange,
-                cl::NDRange(global_size),
-                cl::NDRange(local_work_size));
+                                       cl::NDRange(global_size),
+                                       cl::NDRange(local_work_size));
 
             // Add synchronization to ensure completion before next iteration
             queue.finish();
@@ -135,22 +222,69 @@ public:
         return chrono::duration_cast<chrono::microseconds>(chrono::system_clock::now() - start).count();
     }
 
-    // Simple back substitution method
-    void solveBackSubstitution(cl::Buffer& matrix_buf, cl::Buffer& b_buf, cl::Buffer& x_buf) {
+    /**
+     * @brief Back substitution solver for triangular system
+     *
+     * Solves the upper triangular system after forward elimination.
+     * Uses a single thread to avoid race conditions and maintain
+     * numerical stability.
+     *
+     * Implementation notes:
+     * - Sequential execution for stability
+     * - Single workgroup/thread
+     * - Minimal memory transfers
+     * - In-place computation
+     *
+     * @param matrix_buf Upper triangular matrix [n x n]
+     * @param b_buf      Modified RHS vector [n]
+     * @param x_buf      Solution vector output [n]
+     */
+    void solveBackSubstitution(cl::Buffer &matrix_buf, cl::Buffer &b_buf, cl::Buffer &x_buf)
+    {
         kernel_back.setArg(0, matrix_buf);
         kernel_back.setArg(1, b_buf);
         kernel_back.setArg(2, x_buf);
         kernel_back.setArg(3, n);
 
         queue.enqueueNDRangeKernel(kernel_back, cl::NullRange,
-            cl::NDRange(1),
-            cl::NDRange(1));
+                                   cl::NDRange(1),
+                                   cl::NDRange(1));
     }
 };
 
-// Main function with two optimization strategies
-int main(int argc, char* argv[]) {
-    try {
+/**
+ * @brief Main function demonstrating optimized Gaussian Elimination strategies
+ *
+ * This program compares different optimization strategies for GPU-based
+ * Gaussian Elimination, providing detailed performance analysis and
+ * verification.
+ *
+ * Features:
+ * - Multiple optimization strategies (blocked/coalesced)
+ * - Automatic parameter tuning
+ * - Performance profiling
+ * - Solution verification
+ * - Detailed metrics:
+ *   - Execution time
+ *   - Speedup vs CPU
+ *   - GFLOPS
+ *   - Memory bandwidth
+ *   - Numerical accuracy
+ *
+ * Command line arguments:
+ * -p <platform>  OpenCL platform ID
+ * -d <device>    OpenCL device ID
+ * -n <size>      Matrix dimension
+ * -s <strategy>  Optimization strategy (blocked/coalesced)
+ *
+ * @param argc Argument count
+ * @param argv Argument array
+ * @return     0 on success, error code on failure
+ */
+int main(int argc, char *argv[])
+{
+    try
+    {
         // Configuration
         string kernel_file("optimizedKernels.ocl");
 
@@ -160,8 +294,10 @@ int main(int argc, char* argv[]) {
 
         // Parse strategy string argument manually since defaultOrViaArgs only handles integers
         string strategy = "blocked"; // default value
-        for (int i = 1; i < argc - 1; i++) {
-            if (strcmp(argv[i], "-s") == 0) {
+        for (int i = 1; i < argc - 1; i++)
+        {
+            if (strcmp(argv[i], "-s") == 0)
+            {
                 strategy = string(argv[i + 1]);
                 break;
             }
@@ -181,19 +317,22 @@ int main(int argc, char* argv[]) {
         OptimizedGaussianElimination solver(n, device, context, queue, program);
 
         // Allocate and initialize data
-        float* matrix_original = new float[n * n];
-        float* matrix_gpu = new float[n * n];
-        float* b_original = new float[n];
-        float* b_gpu = new float[n];
-        float* x_cpu = new float[n];
-        float* x_gpu = new float[n];
+        float *matrix_original = new float[n * n];
+        float *matrix_gpu = new float[n * n];
+        float *b_original = new float[n];
+        float *b_gpu = new float[n];
+        float *x_cpu = new float[n];
+        float *x_gpu = new float[n];
 
         // Create test system (same as original)
         srand(42);
-        for (int i = 0; i < n; i++) {
+        for (int i = 0; i < n; i++)
+        {
             float rowSum = 0.0f;
-            for (int j = 0; j < n; j++) {
-                if (i != j) {
+            for (int j = 0; j < n; j++)
+            {
+                if (i != j)
+                {
                     matrix_original[i * n + j] = ((float)rand() / RAND_MAX) * 2.0f - 1.0f;
                     rowSum += abs(matrix_original[i * n + j]);
                 }
@@ -211,32 +350,40 @@ int main(int argc, char* argv[]) {
 
         // Simple sequential elimination for reference
         vector<vector<float>> aug(n, vector<float>(n + 1));
-        for (int i = 0; i < n; i++) {
-            for (int j = 0; j < n; j++) {
+        for (int i = 0; i < n; i++)
+        {
+            for (int j = 0; j < n; j++)
+            {
                 aug[i][j] = matrix_original[i * n + j];
             }
             aug[i][n] = b_original[i];
         }
 
-        for (int k = 0; k < n - 1; k++) {
-            for (int i = k + 1; i < n; i++) {
+        for (int k = 0; k < n - 1; k++)
+        {
+            for (int i = k + 1; i < n; i++)
+            {
                 float factor = aug[i][k] / aug[k][k];
-                for (int j = k; j <= n; j++) {
+                for (int j = k; j <= n; j++)
+                {
                     aug[i][j] -= factor * aug[k][j];
                 }
             }
         }
 
-        for (int i = n - 1; i >= 0; i--) {
+        for (int i = n - 1; i >= 0; i--)
+        {
             x_cpu[i] = aug[i][n];
-            for (int j = i + 1; j < n; j++) {
+            for (int j = i + 1; j < n; j++)
+            {
                 x_cpu[i] -= aug[i][j] * x_cpu[j];
             }
             x_cpu[i] /= aug[i][i];
         }
 
         auto cpu_time = chrono::duration_cast<chrono::microseconds>(
-            chrono::system_clock::now() - cpu_start).count();
+                            chrono::system_clock::now() - cpu_start)
+                            .count();
         cout << "CPU time: " << cpu_time << " us" << endl;
 
         // GPU optimized solution
@@ -250,13 +397,16 @@ int main(int argc, char* argv[]) {
         cout << "\nRunning optimized GPU solver..." << endl;
         _int64 gpu_time;
 
-        if (strategy == "blocked") {
+        if (strategy == "blocked")
+        {
             gpu_time = solver.solveBlocked(matrix_buf, b_buf, x_buf);
         }
-        else if (strategy == "coalesced") {
+        else if (strategy == "coalesced")
+        {
             gpu_time = solver.solveCoalesced(matrix_buf, b_buf, x_buf);
         }
-        else {
+        else
+        {
             // Default to blocked strategy
             cout << "Unknown strategy '" << strategy << "', using blocked" << endl;
             gpu_time = solver.solveBlocked(matrix_buf, b_buf, x_buf);
@@ -269,10 +419,12 @@ int main(int argc, char* argv[]) {
         // Verification and performance analysis
         bool verified = true;
         float max_error = 0.0f;
-        for (int i = 0; i < n; i++) {
+        for (int i = 0; i < n; i++)
+        {
             float error = abs(x_cpu[i] - x_gpu[i]);
             max_error = max(max_error, error);
-            if (error > 1e-3) {
+            if (error > 1e-3)
+            {
                 verified = false;
             }
         }
@@ -306,11 +458,13 @@ int main(int argc, char* argv[]) {
 
         return 0;
     }
-    catch (cl::Error& e) {
+    catch (cl::Error &e)
+    {
         cerr << "OpenCL Error: " << e.what() << ": " << jc::readableStatus(e.err()) << endl;
         return 3;
     }
-    catch (exception& e) {
+    catch (exception &e)
+    {
         cerr << "Error: " << e.what() << endl;
         return 2;
     }

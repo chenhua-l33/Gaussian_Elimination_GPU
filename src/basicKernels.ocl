@@ -4,56 +4,101 @@
 // GAUSSIAN ELIMINATION KERNELS //
 /////////////////////////////////
 
-// Naive Forward Elimination Kernel
-// This kernel eliminates one column at a time
-// Each work item processes one row below the pivot
+/**
+ * @brief Naive Forward Elimination Kernel for Gaussian Elimination
+ * 
+ * This kernel implements the forward elimination phase of Gaussian Elimination.
+ * It processes one column (pivot) at a time in a naive parallel approach.
+ * 
+ * Algorithm:
+ * 1. Each work item processes one row below the pivot row
+ * 2. Calculates the elimination factor for its row
+ * 3. Eliminates all elements in the row using the pivot row
+ * 4. Updates the corresponding RHS vector element
+ * 
+ * Memory Access Pattern:
+ * - Coarse-grained parallelism: one thread per row
+ * - Non-coalesced memory access pattern in the inner loop
+ * - Global memory only, no local memory optimization
+ * 
+ * @param matrix    Input/Output matrix in row-major order [n x n]
+ * @param b         Input/Output RHS vector [n]
+ * @param n         Matrix dimension
+ * @param pivot_row Current pivot row being processed
+ */
 __kernel void forwardElimination(
-    __global float* matrix,
-    __global float* b,
-    int n,
-    int pivot_row
+    __global float* matrix,  // Matrix in row-major order
+    __global float* b,       // RHS vector
+    int n,                   // Matrix dimension
+    int pivot_row           // Current pivot row
 )
 {
-    // The host uses offset cl::NDRange(k + 1), so get_global_id(0) already starts from the correct row
+    // Get the row this work item will process
+    // Note: Host uses offset NDRange(k + 1), so global_id starts after pivot
     int row = get_global_id(0);
     
+    // Boundary check
     if (row >= n) return;
     
-    // Calculate elimination factor
+    // Calculate elimination factor for this row
+    // factor = A[i,k] / A[k,k] where k is pivot_row
     float factor = matrix[row * n + pivot_row] / matrix[pivot_row * n + pivot_row];
     
-    // Eliminate all elements in this row
+    // Eliminate all elements in this row after the pivot
+    // A[i,j] = A[i,j] - factor * A[k,j]
     for (int col = pivot_row; col < n; col++) {
         matrix[row * n + col] -= factor * matrix[pivot_row * n + col];
     }
     
-    // Update RHS vector
+    // Update RHS vector element
+    // b[i] = b[i] - factor * b[k]
     b[row] -= factor * b[pivot_row];
 }
 
-///////////////////////////////////
-// Naive Back Substitution Kernel//
-///////////////////////////////////
-// Each work item computes one unknown
+/**
+ * @brief Back Substitution Kernel for Gaussian Elimination
+ * 
+ * This kernel implements the back substitution phase after forward elimination.
+ * Due to data dependencies, this phase must be executed sequentially.
+ * 
+ * Algorithm:
+ * 1. Process equations from bottom to top
+ * 2. For each equation i:
+ *    - Calculate sum of known terms
+ *    - Solve for x[i]
+ * 
+ * Memory Access Pattern:
+ * - Sequential execution (single thread)
+ * - Row-major matrix access
+ * - Global memory only
+ * 
+ * @param matrix Input matrix in row-major order [n x n], now in upper triangular form
+ * @param b      Input RHS vector [n], modified by forward elimination
+ * @param x      Output solution vector [n]
+ * @param n      Matrix dimension
+ */
 __kernel void backSubstitution(
-    __global float* matrix,
-    __global float* b,
-    __global float* x,
-    int n
+    __global float* matrix,  // Upper triangular matrix
+    __global float* b,       // Modified RHS vector
+    __global float* x,       // Solution vector
+    int n                    // Matrix dimension
 )
 {
-    // This kernel should be called with only ONE work item
-    // Or we need to process sequentially
+    // Only one thread should execute this kernel
     int tid = get_global_id(0);
+    if (tid != 0) return;
     
-    if (tid != 0) return; // Only thread 0 does the work
-    
-    // Back substitution - must be done sequentially
+    // Process equations from bottom to top
     for (int i = n - 1; i >= 0; i--) {
+        // Start with RHS value
         float sum = b[i];
+        
+        // Subtract all known terms
         for (int j = i + 1; j < n; j++) {
             sum -= matrix[i * n + j] * x[j];
         }
+        
+        // Solve for x[i]
         x[i] = sum / matrix[i * n + i];
     }
 }

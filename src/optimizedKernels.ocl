@@ -1,11 +1,38 @@
 #pragma OPENCL EXTENSION cl_amd_printf : enable 
 
 //////////////////////////////////////////////////
-// OPTIMIZED GAUSSIAN ELIMINATION KERNELS      //
+// OPTIMIZED GAUSSIAN ELIMINATION KERNELS        //
 //////////////////////////////////////////////////
 
-// Strategy 1: Block-based Forward Elimination with Shared Memory
-// FIXED: Each work item processes one complete row to avoid race conditions
+/**
+ * This file contains three optimized implementations of Gaussian Elimination:
+ * 1. Block-based with shared memory optimization
+ * 2. Coalesced memory access version
+ * 3. Compute-intensive version for benchmarking
+ * 
+ * Each implementation targets different performance aspects:
+ * - Block-based: Reduces global memory access through local memory caching
+ * - Coalesced: Optimizes memory access patterns for better throughput
+ * - Compute-intensive: Adds controlled computation load for benchmarking
+ */
+
+/**
+ * @brief Block-based Forward Elimination using Local Memory
+ * 
+ * Strategy 1: This implementation uses shared/local memory to cache the pivot row,
+ * reducing global memory access and improving performance on memory-bound systems.
+ * 
+ * Optimization techniques:
+ * 1. Shared memory caching of pivot row
+ * 2. Cooperative loading of pivot data
+ * 3. Complete row processing by each work item
+ * 4. Barrier synchronization for cache coherency
+ * 
+ * Memory access pattern:
+ * - Cooperative loading: Strided access to global memory
+ * - Processing: Sequential access within each row
+ * - Local memory: High-speed access to pivot data
+ */
 __kernel void forwardEliminationBlocked(
     __global float* matrix,
     __global float* b,
@@ -53,8 +80,28 @@ __kernel void forwardEliminationBlocked(
     b[row] -= factor * pivot_cache[pivot_elements];
 }
 
-// Strategy 2: Optimized Forward Elimination with Coalesced Memory Access
-// This version is already correct - each thread handles one element
+/**
+ * @brief Coalesced Memory Access Forward Elimination
+ * 
+ * Strategy 2: This implementation optimizes memory access patterns by having
+ * each thread process a single matrix element, enabling coalesced memory access.
+ * 
+ * Optimization techniques:
+ * 1. Fine-grained parallelism: one thread per matrix element
+ * 2. Coalesced memory access pattern
+ * 3. Minimal thread synchronization
+ * 4. Efficient work distribution
+ * 
+ * Memory access pattern:
+ * - Global memory: Coalesced access for matrix elements
+ * - Thread mapping: 2D grid mapped to 1D thread array
+ * - RHS vector: Atomic updates by first thread in each row
+ * 
+ * Performance characteristics:
+ * - Better for memory bandwidth-limited systems
+ * - Reduced thread divergence
+ * - Higher parallelism than block-based version
+ */
 __kernel void forwardEliminationCoalesced(
     __global float* matrix,
     __global float* b,
@@ -97,6 +144,31 @@ __kernel void forwardEliminationCoalesced(
     }
 }
 
+/**
+ * @brief Compute-Intensive Forward Elimination for Benchmarking
+ * 
+ * This kernel is a modified version of the coalesced implementation that adds
+ * controlled computational intensity for benchmarking purposes. It helps analyze
+ * how the algorithm behaves under different compute/memory ratios.
+ * 
+ * Optimization techniques:
+ * 1. Maintains coalesced memory access pattern
+ * 2. Adds configurable computation load
+ * 3. Prevents compiler optimization of the added computation
+ * 4. Preserves numerical stability
+ * 
+ * Benchmarking features:
+ * - Configurable loop count for compute intensity
+ * - Numerically stable accumulation
+ * - Minimal impact on result accuracy
+ * - Controlled memory access pattern
+ * 
+ * @param matrix     Input/Output matrix in row-major order [n x n]
+ * @param b          Input/Output RHS vector [n]
+ * @param n          Matrix dimension
+ * @param pivot_row  Current pivot row
+ * @param loop_count Number of computation iterations for benchmarking
+ */
 __kernel void forwardEliminationCoalescedIntensive(
     __global float* matrix,
     __global float* b,
@@ -148,7 +220,29 @@ __kernel void forwardEliminationCoalescedIntensive(
 }
 
 
-// Simple Back Substitution (single workgroup)
+/**
+ * @brief Optimized Back Substitution Kernel
+ * 
+ * This kernel performs the back substitution phase after forward elimination.
+ * Due to data dependencies, this phase is inherently sequential and runs on a single thread.
+ * However, it includes optimizations for numerical stability and error handling.
+ * 
+ * Optimization techniques:
+ * 1. Single thread execution to avoid synchronization overhead
+ * 2. Numerical stability checks
+ * 3. Singular matrix handling
+ * 4. Sequential memory access pattern
+ * 
+ * Error handling:
+ * - Checks for near-zero diagonal elements
+ * - Handles singular matrices gracefully
+ * - Sets solution to zero for singular cases
+ * 
+ * @param matrix Input matrix in row-major order [n x n], now in upper triangular form
+ * @param b      Input RHS vector [n], modified by forward elimination
+ * @param x      Output solution vector [n]
+ * @param n      Matrix dimension
+ */
 __kernel void backSubstitution(
     __global float* matrix,
     __global float* b,
